@@ -71,7 +71,7 @@ def calculate_remaining_loan_balance(principal, annual_rate, original_tenure_yea
 
 # --- API Endpoints ---
 
-@app.route('/api/calculate-net-zero-interest', methods=['POST'])
+@app.route('/api/calculate-netzerointerest', methods=['POST'])
 def calculate_net_zero_interest():
     data = request.get_json()
     loan_amount = data.get('loanAmount')
