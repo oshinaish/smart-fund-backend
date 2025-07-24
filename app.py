@@ -7,16 +7,12 @@ import math
 app = Flask(__name__)
 CORS(app) # Enable CORS for all routes
 
-# --- Global Constants (from your frontend code) ---
+# --- Global Constants ---
 FIXED_LOAN_INTEREST_RATE = 8  # 8% Annual
 FIXED_LOAN_TENURE_YEARS = 30  # 30 Years
-RISK_APPETITE_RETURNS = {
-    "low": 6,
-    "moderate": 10, # Changed from 9 to 10 for consistency with frontend default
-    "high": 14 # Changed from 12 to 14 for consistency with frontend default
-}
+# RISK_APPETITE_RETURNS will not be used if risk_appetite is numeric
 
-# --- Financial Calculation Functions (Translated from JavaScript) ---
+# --- Financial Calculation Functions ---
 
 def calculate_emi(principal, annual_rate, tenure_years):
     if principal <= 0 or tenure_years <= 0:
@@ -58,17 +54,12 @@ def calculate_remaining_loan_balance(principal, annual_rate, original_tenure_yea
         return principal # No payments made yet
 
     monthly_rate = (annual_rate / 100) / 12
-    # total_payments = original_tenure_years * 12 # Not directly used in this formula
     payments_made = payments_made_years * 12
 
     if monthly_rate == 0:
-        # Simplified for zero interest rate
         return principal * (1 - (payments_made_years / original_tenure_years))
 
     emi = calculate_emi(principal, annual_rate, original_tenure_years)
-    # Formula for remaining balance (Present Value of remaining payments)
-    # remaining_balance = emi * (1 - math.pow(1 + monthly_rate, -(original_tenure_years * 12 - payments_made))) / monthly_rate
-    # Simpler formula: Loan balance after N payments = P * (1+r)^N - EMI * (((1+r)^N - 1)/r)
     remaining_balance = principal * math.pow(1 + monthly_rate, payments_made) - emi * (math.pow(1 + monthly_rate, payments_made) - 1) / monthly_rate
     
     return max(0, remaining_balance) # Ensure balance doesn't go negative
@@ -81,11 +72,13 @@ def calculate_net_zero_interest():
     data = request.get_json()
     loan_amount = data.get('loan_amount')
     monthly_budget = data.get('monthly_budget')
-    risk_appetite = data.get('risk_appetite') # This will now be 'low', 'moderate', or 'high' from frontend
+    risk_appetite = data.get('risk_appetite') # This will now be a numeric value
 
-    expected_return_rate = RISK_APPETITE_RETURNS.get(risk_appetite)
-    if expected_return_rate is None:
-        return jsonify({"status": "error", "message": "Invalid risk appetite provided."}), 400
+    # Validate risk_appetite as a number
+    if not isinstance(risk_appetite, (int, float)) or risk_appetite <= 0:
+        return jsonify({"status": "error", "message": "Invalid risk appetite provided. Must be a positive number."}), 400
+    
+    expected_return_rate = risk_appetite # Directly use the numeric risk appetite
 
     standard_emi = calculate_emi(loan_amount, FIXED_LOAN_INTEREST_RATE, FIXED_LOAN_TENURE_YEARS)
     total_loan_interest_payable = calculate_total_interest(loan_amount, standard_emi, FIXED_LOAN_TENURE_YEARS)
@@ -140,9 +133,11 @@ def calculate_min_time_net_zero():
     monthly_budget = data.get('monthly_budget')
     risk_appetite = data.get('risk_appetite')
 
-    expected_return_rate = RISK_APPETITE_RETURNS.get(risk_appetite)
-    if expected_return_rate is None:
-        return jsonify({"status": "error", "message": "Invalid risk appetite provided."}), 400
+    # Validate risk_appetite as a number
+    if not isinstance(risk_appetite, (int, float)) or risk_appetite <= 0:
+        return jsonify({"status": "error", "message": "Invalid risk appetite provided. Must be a positive number."}), 400
+
+    expected_return_rate = risk_appetite # Directly use the numeric risk appetite
 
     min_time_years = -1
     best_result = {}
@@ -213,9 +208,11 @@ def calculate_max_growth():
     risk_appetite = data.get('risk_appetite')
     optimization_period_years = data.get('optimization_period_years')
 
-    expected_return_rate = RISK_APPETITE_RETURNS.get(risk_appetite)
-    if expected_return_rate is None:
-        return jsonify({"status": "error", "message": "Invalid risk appetite provided."}), 400
+    # Validate risk_appetite as a number
+    if not isinstance(risk_appetite, (int, float)) or risk_appetite <= 0:
+        return jsonify({"status": "error", "message": "Invalid risk appetite provided. Must be a positive number."}), 400
+
+    expected_return_rate = risk_appetite # Directly use the numeric risk appetite
 
     standard_emi = calculate_emi(loan_amount, FIXED_LOAN_INTEREST_RATE, FIXED_LOAN_TENURE_YEARS)
     monthly_investment = monthly_budget - standard_emi
