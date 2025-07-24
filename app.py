@@ -12,8 +12,8 @@ FIXED_LOAN_INTEREST_RATE = 8  # 8% Annual
 FIXED_LOAN_TENURE_YEARS = 30  # 30 Years
 RISK_APPETITE_RETURNS = {
     "low": 6,
-    "moderate": 9,
-    "high": 12
+    "moderate": 10, # Changed from 9 to 10 for consistency with frontend default
+    "high": 14 # Changed from 12 to 14 for consistency with frontend default
 }
 
 # --- Financial Calculation Functions (Translated from JavaScript) ---
@@ -58,76 +58,104 @@ def calculate_remaining_loan_balance(principal, annual_rate, original_tenure_yea
         return principal # No payments made yet
 
     monthly_rate = (annual_rate / 100) / 12
-    total_payments = original_tenure_years * 12
+    # total_payments = original_tenure_years * 12 # Not directly used in this formula
     payments_made = payments_made_years * 12
 
     if monthly_rate == 0:
-        return principal * (1 - (payments_made / total_payments))
+        # Simplified for zero interest rate
+        return principal * (1 - (payments_made_years / original_tenure_years))
 
     emi = calculate_emi(principal, annual_rate, original_tenure_years)
+    # Formula for remaining balance (Present Value of remaining payments)
+    # remaining_balance = emi * (1 - math.pow(1 + monthly_rate, -(original_tenure_years * 12 - payments_made))) / monthly_rate
+    # Simpler formula: Loan balance after N payments = P * (1+r)^N - EMI * (((1+r)^N - 1)/r)
     remaining_balance = principal * math.pow(1 + monthly_rate, payments_made) - emi * (math.pow(1 + monthly_rate, payments_made) - 1) / monthly_rate
+    
     return max(0, remaining_balance) # Ensure balance doesn't go negative
 
 
 # --- API Endpoints ---
 
-@app.route('/api/calculate-netzerointerest', methods=['POST'])
+@app.route('/api/calculate-net-zero-interest', methods=['POST'])
 def calculate_net_zero_interest():
     data = request.get_json()
-    loan_amount = data.get('loanAmount')
-    monthly_budget = data.get('monthlyBudget')
-    risk_appetite = data.get('riskAppetite')
+    loan_amount = data.get('loan_amount')
+    monthly_budget = data.get('monthly_budget')
+    risk_appetite = data.get('risk_appetite') # This will now be 'low', 'moderate', or 'high' from frontend
 
     expected_return_rate = RISK_APPETITE_RETURNS.get(risk_appetite)
+    if expected_return_rate is None:
+        return jsonify({"status": "error", "message": "Invalid risk appetite provided."}), 400
 
     standard_emi = calculate_emi(loan_amount, FIXED_LOAN_INTEREST_RATE, FIXED_LOAN_TENURE_YEARS)
     total_loan_interest_payable = calculate_total_interest(loan_amount, standard_emi, FIXED_LOAN_TENURE_YEARS)
+    
+    # Calculate required SIP to offset total interest over loan tenure
     required_monthly_investment = calculate_required_sip(total_loan_interest_payable, expected_return_rate, FIXED_LOAN_TENURE_YEARS)
     available_for_investment = monthly_budget - standard_emi
 
-    if required_monthly_investment > available_for_investment:
+    if available_for_investment < 0:
+        # If budget is less than EMI, loan is not sustainable, no investment possible
         response = {
             "status": "not_achievable",
             "monthlyEMI": standard_emi,
-            "monthlyInvestment": available_for_investment if available_for_investment > 0 else 0,
+            "monthlyInvestment": 0,
             "totalLoanInterestPayable": total_loan_interest_payable,
-            "estimatedInvestmentFutureValue": calculate_sip_future_value(available_for_investment if available_for_investment > 0 else 0, expected_return_rate, FIXED_LOAN_TENURE_YEARS),
-            "guidanceMessage": f"Cannot achieve Net Zero interest with current budget. You need to invest {required_monthly_investment:.0f} monthly, but only {available_for_investment:.0f} is available after EMI.",
-            "chartData": {"loanInterest": total_loan_interest_payable, "investmentGain": calculate_sip_future_value(available_for_investment if available_for_investment > 0 else 0, expected_return_rate, FIXED_LOAN_TENURE_YEARS)},
-            "recommendation": "Increase budget or reduce loan to achieve this goal."
+            "estimatedInvestmentFutureValue": 0,
+            "guidanceMessage": f"Your monthly budget (₹{monthly_budget:.0f}) is less than the EMI (₹{standard_emi:.0f}). Loan is not sustainable.",
+            "chartData": {"loanInterest": total_loan_interest_payable, "investmentGain": 0},
+            "recommendation": "Increase budget or reduce loan amount/tenure."
+        }
+    elif required_monthly_investment > available_for_investment:
+        # Not enough available budget to meet the required investment
+        investment_fv_with_available = calculate_sip_future_value(available_for_investment, expected_return_rate, FIXED_LOAN_TENURE_YEARS)
+        response = {
+            "status": "warning", # Changed to warning as it's a budget constraint
+            "monthlyEMI": standard_emi,
+            "monthlyInvestment": available_for_investment,
+            "totalLoanInterestPayable": total_loan_interest_payable,
+            "estimatedInvestmentFutureValue": investment_fv_with_available,
+            "guidanceMessage": f"To achieve Net Zero interest, you need to invest ₹{required_monthly_investment:.0f} monthly. Only ₹{available_for_investment:.0f} is available. Your investment will cover ₹{investment_fv_with_available:.0f} of the interest.",
+            "chartData": {"loanInterest": total_loan_interest_payable, "investmentGain": investment_fv_with_available},
+            "recommendation": "Increase budget, reduce loan, or consider a higher risk appetite."
         }
     else:
+        # Achievable
         response = {
             "status": "success",
             "monthlyEMI": standard_emi,
             "monthlyInvestment": required_monthly_investment,
             "totalLoanInterestPayable": total_loan_interest_payable,
             "estimatedInvestmentFutureValue": total_loan_interest_payable, # By definition, we hit the target
-            "guidanceMessage": f"To achieve Net Zero interest, allocate {required_monthly_investment:.0f} monthly to investments.",
+            "guidanceMessage": f"Achievable! Allocate ₹{required_monthly_investment:.0f} monthly to investments to offset total loan interest.",
             "chartData": {"loanInterest": total_loan_interest_payable, "investmentGain": total_loan_interest_payable},
-            "recommendation": "Achievable. Your investment strategy is aligned to offset loan interest."
+            "recommendation": "Your investment strategy is aligned to offset loan interest."
         }
     return jsonify(response)
 
 @app.route('/api/calculate-min-time-net-zero', methods=['POST'])
 def calculate_min_time_net_zero():
     data = request.get_json()
-    loan_amount = data.get('loanAmount')
-    monthly_budget = data.get('monthlyBudget')
-    risk_appetite = data.get('riskAppetite')
+    loan_amount = data.get('loan_amount')
+    monthly_budget = data.get('monthly_budget')
+    risk_appetite = data.get('risk_appetite')
 
     expected_return_rate = RISK_APPETITE_RETURNS.get(risk_appetite)
+    if expected_return_rate is None:
+        return jsonify({"status": "error", "message": "Invalid risk appetite provided."}), 400
 
     min_time_years = -1
     best_result = {}
 
-    for tenure in range(1, FIXED_LOAN_TENURE_YEARS + 1):
+    for tenure in range(1, FIXED_LOAN_TENURE_YEARS + 1): # Iterate from 1 year up to max loan tenure
         current_emi = calculate_emi(loan_amount, FIXED_LOAN_INTEREST_RATE, tenure)
+        
+        # If EMI exceeds budget, this tenure is not viable
+        if monthly_budget - current_emi < 0:
+            continue # Skip to next tenure if EMI is too high
+
         current_total_interest = calculate_total_interest(loan_amount, current_emi, tenure)
         current_available_investment = monthly_budget - current_emi
-
-        if current_available_investment <= 0:
-            continue # Not enough budget for investment
 
         current_investment_fv = calculate_sip_future_value(current_available_investment, expected_return_rate, tenure)
 
@@ -149,22 +177,26 @@ def calculate_min_time_net_zero():
             "monthlyInvestment": best_result["monthlyInvestment"],
             "totalLoanInterestPayable": best_result["totalLoanInterestPayable"],
             "estimatedInvestmentFutureValue": best_result["estimatedInvestmentFutureValue"],
-            "guidanceMessage": f"Achieve Net Zero interest in {min_time_years} years by allocating {best_result['monthlyInvestment']:.0f} monthly.",
+            "guidanceMessage": f"Achieve Net Zero interest in {min_time_years} years by allocating ₹{best_result['monthlyInvestment']:.0f} monthly.",
             "chartData": {"loanInterest": best_result["totalLoanInterestPayable"], "investmentGain": best_result["estimatedInvestmentFutureValue"]},
             "recommendation": "Optimal tenure found for offsetting interest."
         }
     else:
         # If not achievable within max tenure, calculate for max tenure to show current state
-        standard_emi = calculate_emi(loan_amount, FIXED_LOAN_INTEREST_RATE, FIXED_LOAN_TENURE_YEARS)
-        available_for_investment = monthly_budget - standard_emi
-        investment_fv_at_max_tenure = calculate_sip_future_value(available_for_investment if available_for_investment > 0 else 0, expected_return_rate, FIXED_LOAN_TENURE_YEARS)
-        total_interest_at_max_tenure = calculate_total_interest(loan_amount, standard_emi, FIXED_LOAN_TENURE_YEARS)
+        standard_emi_at_max_tenure = calculate_emi(loan_amount, FIXED_LOAN_INTEREST_RATE, FIXED_LOAN_TENURE_YEARS)
+        available_for_investment_at_max_tenure = monthly_budget - standard_emi_at_max_tenure
+        
+        investment_fv_at_max_tenure = 0
+        if available_for_investment_at_max_tenure > 0:
+            investment_fv_at_max_tenure = calculate_sip_future_value(available_for_investment_at_max_tenure, expected_return_rate, FIXED_LOAN_TENURE_YEARS)
+        
+        total_interest_at_max_tenure = calculate_total_interest(loan_amount, standard_emi_at_max_tenure, FIXED_LOAN_TENURE_YEARS)
 
         response = {
             "status": "not_achievable",
             "minTimeYears": FIXED_LOAN_TENURE_YEARS, # Indicates max tenure reached
-            "monthlyEMI": standard_emi,
-            "monthlyInvestment": available_for_investment if available_for_investment > 0 else 0,
+            "monthlyEMI": standard_emi_at_max_tenure,
+            "monthlyInvestment": available_for_investment_at_max_tenure if available_for_investment_at_max_tenure > 0 else 0,
             "totalLoanInterestPayable": total_interest_at_max_tenure,
             "estimatedInvestmentFutureValue": investment_fv_at_max_tenure,
             "guidanceMessage": f"Cannot achieve Net Zero interest within {FIXED_LOAN_TENURE_YEARS} years with current budget and investment strategy.",
@@ -176,12 +208,14 @@ def calculate_min_time_net_zero():
 @app.route('/api/calculate-max-growth', methods=['POST'])
 def calculate_max_growth():
     data = request.get_json()
-    loan_amount = data.get('loanAmount')
-    monthly_budget = data.get('monthlyBudget')
-    risk_appetite = data.get('riskAppetite')
-    optimization_period_years = data.get('optimizationPeriodYears')
+    loan_amount = data.get('loan_amount')
+    monthly_budget = data.get('monthly_budget')
+    risk_appetite = data.get('risk_appetite')
+    optimization_period_years = data.get('optimization_period_years')
 
     expected_return_rate = RISK_APPETITE_RETURNS.get(risk_appetite)
+    if expected_return_rate is None:
+        return jsonify({"status": "error", "message": "Invalid risk appetite provided."}), 400
 
     standard_emi = calculate_emi(loan_amount, FIXED_LOAN_INTEREST_RATE, FIXED_LOAN_TENURE_YEARS)
     monthly_investment = monthly_budget - standard_emi
